@@ -1,3 +1,18 @@
+output "google_kms_key_ring_id" {
+  description = "The ID of the Google Cloud KMS key ring."
+  value       = module.google_kms_key.google_kms_key_ring_id
+}
+
+output "google_kms_crypto_key_id" {
+  description = "The ID of the Google Cloud KMS crypto key."
+  value       = module.google_kms_key.google_kms_crypto_key_id
+}
+
+output "google_kms_crypto_key_name" {
+  description = "The name of the Google Cloud KMS crypto key."
+  value       = module.google_kms_key.google_kms_crypto_key_name
+}
+
 output "bronze_bucket_name" {
   description = "The bronze bucket name."
   value       = module.bronze_bucket.bucket_name
