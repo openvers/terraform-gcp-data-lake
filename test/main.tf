@@ -42,14 +42,16 @@ data "google_project" "this" {
 }
 
 locals {
-  suffix = "test-${random_string.this.result}"
+  pool_id                          = var.WORKLOAD_IDENTITY_POOL_ID
+  wif_provider_attribute_condition = "assertion.repository_owner == '${var.GITHUB_REPOSITORY_OWNER}'"
+
   principal_roles = [
     {
-      principal = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.POOL_ID}/subject/repo:${var.GITHUB_REPOSITORY}:ref:${var.GITHUB_REF}",
+      principal = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${local.pool_id}/subject/repo:${var.GITHUB_REPOSITORY}:ref:${var.GITHUB_REF}",
       role      = "roles/iam.workloadIdentityUser"
     },
     {
-      principal = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.POOL_ID}/subject/repo:${var.GITHUB_REPOSITORY}:environment:${var.GITHUB_ENV}",
+      principal = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${local.pool_id}/subject/repo:${var.GITHUB_REPOSITORY}:environment:${var.GITHUB_ENV}",
       role      = "roles/iam.workloadIdentityUser"
     },
   ]
@@ -75,15 +77,16 @@ provider "google" {
 ## - `new_service_account_name`: New service account name.
 ##---------------------------------------------------------------------------------------------------------------------
 module "service_account_auth" {
-  source = "github.com/openvers/terraform-gcp-service-account.git?ref=5645d79241069640d425010dbf0cf11785a03da7"
+  source = "github.com/openvers/terraform-gcp-service-account.git?ref=9e9c63bd03b7dd24af95527e3b84076e3e7248fa"
 
   IMPERSONATE_SERVICE_ACCOUNT_EMAIL = var.IMPERSONATE_SERVICE_ACCOUNT_EMAIL
-  new_service_account_name          = "example-tf-sa"
+  new_service_account_name          = var.new_service_account_name
   roles_list = [
     "roles/storage.admin",
     "roles/cloudkms.admin",
     "roles/iam.serviceAccountUser",
-    "roles/iam.serviceAccountAdmin"
+    "roles/iam.serviceAccountAdmin",
+    "roles/iam.workloadIdentityPoolAdmin",
   ]
 
   providers = {
@@ -117,14 +120,14 @@ provider "google" {
 ## - `prinicpal_roles`: List of objects defining WIF prinicpals and impersonating roles.
 ## - `service_account_id`: New service account ID.
 ##---------------------------------------------------------------------------------------------------------------------
-module "workload_identity_federation_principals" {
-  source = "github.com/openvers/terraform-gcp-service-account.git//modules/workflow_identity_federation_principal?ref=5645d79241069640d425010dbf0cf11785a03da7"
+module "workload_identity_federation" {
+  source = "github.com/openvers/terraform-gcp-service-account.git//modules/workflow_identity_federation?ref=9e9c63bd03b7dd24af95527e3b84076e3e7248fa"
 
-  project_number     = data.google_project.this.number
-  pool_id            = var.POOL_ID
-  provider_id        = var.PROVIDER_ID
-  principal_roles    = local.principal_roles
-  service_account_id = module.service_account_auth.service_account_id
+  pool_id                      = var.WORKLOAD_IDENTITY_POOL_ID
+  provider_id                  = var.workload_identity_provider_id
+  provider_attribute_condition = local.wif_provider_attribute_condition
+  principal_roles              = local.principal_roles
+  service_account_id           = module.service_account_auth.service_account_id
 
   providers = {
     google.auth_session = google.auth_session
@@ -148,11 +151,11 @@ module "data_lake" {
   source     = "../"
   depends_on = [module.service_account_auth]
 
-  bronze_bucket_name = "test-bronze-bucket-${local.suffix}"
-  silver_bucket_name = "test-silver-bucket-${local.suffix}"
-  gold_bucket_name   = "test-gold-bucket-${local.suffix}"
-  kms_key_ring_name  = "test-key-ring-${local.suffix}"
-  kms_key_name       = "test-data-lake-key-${local.suffix}"
+  bronze_bucket_name = "test-bronze-bucket-${random_string.this.result}"
+  silver_bucket_name = "test-silver-bucket-${random_string.this.result}"
+  gold_bucket_name   = "test-gold-bucket-${random_string.this.result}"
+  kms_key_ring_name  = "test-key-ring-${random_string.this.result}"
+  kms_key_name       = "test-data-lake-key-${random_string.this.result}"
 
   providers = {
     google.auth_session = google.auth_session
