@@ -1,0 +1,150 @@
+name: '[Reusable] GCS Write Pytest'
+
+on:
+  workflow_call:
+    inputs:
+      ACT_MODE:
+        description: |
+          For running Github Action Workflows locally with Nektos act.
+        required: true
+        type: boolean
+      markers:
+        description: |
+          PyTest markers to select specific tests within Github Action Workflows.
+        required: true
+        type: string
+      working_directory:
+        description: |
+          Working directory containing Terraform test scripts.
+        required: false
+        type: string
+        default: './test'
+
+    secrets:
+      GOOGLE_WORKLOAD_IDENTITY_PROVIDER:
+        description: GCP Workload Identity Provider resource name for GitHub OIDC authentication.
+        required: true
+      GOOGLE_IMPERSONATE_SERVICE_ACCOUNT_EMAIL:
+        description: GCP service account email to impersonate for test execution.
+        required: true
+      TF_API_TOKEN:
+        description: Terraform.io access token.
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  terraform-output:
+    name: Terraform Output
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+
+    outputs:
+      BRONZE_BUCKET_NAME: ${{ steps.tf-raw.outputs.BRONZE_BUCKET_NAME }}
+      SILVER_BUCKET_NAME: ${{ steps.tf-raw.outputs.SILVER_BUCKET_NAME }}
+      GOLD_BUCKET_NAME: ${{ steps.tf-raw.outputs.GOLD_BUCKET_NAME }}
+      GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.tf-raw.outputs.GOOGLE_OAUTH_ACCESS_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+          terraform_wrapper: false
+
+      - name: terraform init
+        run: terraform init
+
+      - name: terraform raw output
+        id: tf-raw
+        run: |
+          if [[ "${{ inputs.ACT_MODE }}" == "true" ]]; then
+            google_oauth_access_token="$(terraform output -raw google_oauth_access_token)"
+            echo "::add-mask::$google_oauth_access_token"
+          else
+            google_oauth_access_token=""
+          fi
+
+          {
+            echo "BRONZE_BUCKET_NAME=$(terraform output -raw bronze_bucket_name)"
+            echo "SILVER_BUCKET_NAME=$(terraform output -raw silver_bucket_name)"
+            echo "GOLD_BUCKET_NAME=$(terraform output -raw gold_bucket_name)"
+            echo "GOOGLE_OAUTH_ACCESS_TOKEN=$google_oauth_access_token"
+          } >> "$GITHUB_OUTPUT"
+
+  terraform-test:
+    name: Terraform Test
+    needs: [terraform-output]
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}/unit_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Authenticate to Google Cloud
+        if: ${{ !inputs.ACT_MODE }}
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GOOGLE_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT_EMAIL }}
+          token_format: access_token
+          access_token_lifetime: 3600s
+          create_credentials_file: false
+          export_environment_variables: false
+
+      - name: Export Google OAuth access token
+        if: ${{ !inputs.ACT_MODE }}
+        run: |
+          echo "::add-mask::${{ steps.auth.outputs.access_token }}"
+          echo "GOOGLE_OAUTH_ACCESS_TOKEN=${{ steps.auth.outputs.access_token }}" >> "$GITHUB_ENV"
+
+      - name: Export local Google OAuth access token
+        if: ${{ inputs.ACT_MODE }}
+        run: |
+          echo "::add-mask::${{ needs.terraform-output.outputs.GOOGLE_OAUTH_ACCESS_TOKEN }}"
+          echo "GOOGLE_OAUTH_ACCESS_TOKEN=${{ needs.terraform-output.outputs.GOOGLE_OAUTH_ACCESS_TOKEN }}" >> "$GITHUB_ENV"
+
+      - name: Export test environment
+        run: |
+          {
+            echo "BRONZE_BUCKET_NAME=${{ needs.terraform-output.outputs.BRONZE_BUCKET_NAME }}"
+            echo "SILVER_BUCKET_NAME=${{ needs.terraform-output.outputs.SILVER_BUCKET_NAME }}"
+            echo "GOLD_BUCKET_NAME=${{ needs.terraform-output.outputs.GOLD_BUCKET_NAME }}"
+          } >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest google-cloud-storage fsspec gcsfs
+
+      - name: Test with pytest
+        run: |
+          pytest -m "${{ inputs.markers }}" \
+            -rs \
+            --doctest-modules \
+            --junitxml=junit/test-results.xml
+
+      - name: Upload pytest test results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-results
+          path: ${{ inputs.working_directory }}/unit_test/junit/test-results.xml

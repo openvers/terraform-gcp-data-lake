@@ -1,0 +1,5 @@
+new_service_account_name = "data-lake-service-account"
+GITHUB_REPOSITORY_OWNER  = "openvers"
+GITHUB_REPOSITORY        = "openvers/terraform-gcp-data-lake"
+GITHUB_REF               = "refs/heads/main"
+GITHUB_ENV               = "production"
